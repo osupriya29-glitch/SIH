@@ -27,3 +27,13 @@ P5 → Chat + map UI using mock data
 
 P6 → FastAPI + DB + integration skeleton
 running GIS database
+
+
+/*AI reads the unified data.
+Generates marine analysis.
+Save the AI analysis/results into the marine_analyses table.
+
+Phase 11 — Alerts & Recommendations
+
+Save generated alerts into the alerts table.
+Recommendations can be stored along with analyses/alerts depending on the design.*/
