@@ -1,0 +1,7 @@
+# SIH
+POINTS:
+1) HELLO
+2) BYE
+3) TTYL
+4) LOVE YOU
+5) 
