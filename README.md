@@ -1,6 +1,6 @@
 # SIH 2026 — Ocean / Marine Agentic AI Platform
 
-Comprehensive backend and frontend for marine intelligence combining oceanographic, meteorological, buoy, tidal, and satellite observations into a unified data service with autonomous agent architecture readiness.
+Comprehensive backend for marine intelligence combining oceanographic, meteorological, buoy, tidal, and satellite observations into a unified data service with autonomous agent architecture readiness.
 
 ## Project Structure
 ```
@@ -19,39 +19,12 @@ FINAL SIH/
 │   ├── services/         # Business logic (marine aggregation service, user service)
 │   ├── tests/            # Automated test suite (53 tests passing across Phases 1-9)
 │   └── main.py           # FastAPI entrypoint & router configuration
-├── frontend/             # Interactive Marine Intelligence Dashboard UI
-│   ├── index.html        # Main dashboard interface
-│   ├── styles.css        # Responsive ocean glassmorphism design
-│   ├── app.js            # Live API integration & discrepancy inspector
-│   └── README.md         # Frontend guide
 ├── .env                  # Environment variables & provider API keys
 ├── .env.example          # Environment template
 ├── pytest.ini            # Pytest configuration
 └── requirements.txt      # Python dependencies
 ```
 
-## Quickstart
-
-### 1. Backend
-From this directory:
-```powershell
-# Activate virtual environment
-.\.venv\Scripts\Activate.ps1
-
-# Start the API server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-- Interactive Swagger UI: [http://localhost:8000/docs](http://localhost:8000/docs)
-- OpenAPI JSON Schema: [http://localhost:8000/openapi.json](http://localhost:8000/openapi.json)
-- Unified Marine Endpoint: `GET http://localhost:8000/api/marine/data?latitude=18.92&longitude=72.83`
-
-### 2. Frontend
-Open `frontend/index.html` directly in any web browser, or serve locally:
-```powershell
-cd frontend
-python -m http.server 3000
-```
-Then visit [http://localhost:3000](http://localhost:3000).
 
 ### 3. Running Automated Tests
 ```powershell
