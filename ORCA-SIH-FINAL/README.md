@@ -32,7 +32,3 @@ Open the localhost URL shown by Vite.
 The frontend is intentionally backend-ready without exposing API keys. Replace the demo data/service functions in `src/services/api.js` when the team connects the real ISRO/EO, weather, GIS and AI services.
 
 The map uses external OpenStreetMap/Esri tiles, so map imagery requires internet access. The curated city labels switch between English, Hindi and Marathi; the underlying OpenStreetMap basemap may still contain its own provider labels.
-
-## Validation
-
-The supplied source was syntax-checked with the TypeScript JSX transpiler. A full Vite install/build could not be completed in the packaging environment because the package installation timed out; run `npm.cmd install` and `npm.cmd run dev` locally.
