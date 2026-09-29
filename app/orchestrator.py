@@ -1,0 +1,162 @@
+from typing import Dict, Any, Optional
+from app.config import settings
+from app.schemas.nlu import NLUInput, NLUOutput, IntentEnum
+from app.schemas.decision import FinalDecisionOutput, CandidatePackage
+from app.schemas.marine import PFZCandidate
+from app.schemas.weather import WeatherReading, MarineConditions, HazardAlert
+from app.schemas.gis import Route, GeofenceResult
+from app.schemas.risk import RiskResult
+from app.agents.nlu_agent import nlu_agent
+from app.agents.planner_agent import planner_agent
+from app.agents.decision_agent import decision_agent
+
+_ORCA_SESSION_MEMORY: Dict[str, Dict[str, Any]] = {}
+
+class Orchestrator:
+    """
+    ORCA Master Pipeline Orchestrator.
+    Sequences NLU -> Clarification Check -> Planner & Specialist Execution -> Risk Scoring -> Decision Generation.
+    """
+
+    def process_query(self, session_id: str, text: str, prior_context: Optional[Dict[str, Any]] = None) -> FinalDecisionOutput:
+        context = dict(prior_context or {})
+
+        # Merge backend session memory if exists
+        mem = _ORCA_SESSION_MEMORY.get(session_id, {})
+        for k, v in mem.items():
+            if k not in context:
+                context[k] = v
+
+        # If previous turn had a pending query (waiting for location), and user now supplied a location/answer:
+        effective_text = text
+        if mem.get("pending_query"):
+            extracted_loc = nlu_agent.extract_location(text)
+            if extracted_loc or len(text.split()) <= 4:
+                loc = extracted_loc or text.strip().title()
+                effective_text = f"{mem['pending_query']} from {loc}"
+                context["location"] = loc
+
+        # Step 1: Run NLU Agent
+        nlu_in = NLUInput(
+            session_id=session_id,
+            text=effective_text,
+            prior_context=context
+        )
+        nlu_out: NLUOutput = nlu_agent.process(nlu_in)
+
+        # Step 2: Check for clarification short-circuit
+        if nlu_out.needs_clarification:
+            _ORCA_SESSION_MEMORY[session_id] = {
+                "pending_query": effective_text,
+                "pending_intent": nlu_out.intent.value,
+                "time_window": nlu_out.entities.time_window.model_dump() if nlu_out.entities.time_window else None,
+                "date": nlu_out.entities.date,
+                "duration_hours": nlu_out.entities.duration_hours
+            }
+            return FinalDecisionOutput(
+                session_id=session_id,
+                language=nlu_out.language,
+                needs_clarification=True,
+                clarification_question=nlu_out.clarification_question,
+                explanation_text=nlu_out.clarification_question or "Please provide your departure location.",
+                disclaimer=settings.disclaimer_text
+            )
+
+        # Clarification satisfied - clear pending
+        if session_id in _ORCA_SESSION_MEMORY and "pending_query" in _ORCA_SESSION_MEMORY[session_id]:
+            del _ORCA_SESSION_MEMORY[session_id]["pending_query"]
+
+        _ORCA_SESSION_MEMORY.setdefault(session_id, {})["location"] = nlu_out.entities.location_text
+        _ORCA_SESSION_MEMORY[session_id]["date"] = nlu_out.entities.date
+
+        # Fast Short-Circuit for Greetings & Conceptual / Ocean Science Queries (Requirement 9 & 20)
+        # Bypasses unnecessary PFZ search, A* grid routing, and risk calculation for instantaneous < 500ms responses
+        is_greeting_or_concept = (
+            nlu_out.intent in [IntentEnum.OTHER, IntentEnum.CHLOROPHYLL_SST_LOOKUP, IntentEnum.PRODUCTIVITY_EXPLANATION]
+            and not any(kw in text.lower() for kw in ["fish", "trip", "wave", "hazard", "storm", "cyclone", "safe to go", "can i go", "मार्ग"])
+        )
+        if is_greeting_or_concept:
+            return decision_agent.decide_and_explain(
+                session_id=session_id,
+                language=nlu_out.language,
+                candidates=[],
+                execution_trace=[],
+                user_query=text,
+                intent=nlu_out.intent.value,
+                location_text=nlu_out.entities.location_text
+            )
+
+        # Fast Short-Circuit for Multi-Day Intelligence Comparison (Requirements 6, 7, 10, 11)
+        if nlu_out.intent == IntentEnum.MULTI_DAY_COMPARISON:
+            loc_text = nlu_out.entities.location_text or (context.get("selected_port") if context else None) or _ORCA_SESSION_MEMORY.get(session_id, {}).get("location")
+            return decision_agent.decide_and_explain(
+                session_id=session_id,
+                language=nlu_out.language,
+                candidates=[],
+                execution_trace=[],
+                user_query=text,
+                intent=nlu_out.intent.value,
+                location_text=loc_text
+            )
+
+
+        # Step 3: Run Planner Agent (Decomposes, calls specialist tools, evaluates risk)
+        plan_out = planner_agent.plan_and_execute(nlu_out)
+        res = plan_out.results
+
+        # Step 4: Assemble candidate packages
+        raw_candidates = res.get("pfz_candidates", [])
+        weather_by_cand = res.get("weather_by_candidate", {})
+        marine_by_cand = res.get("marine_by_candidate", {})
+        hazards_list = res.get("hazards", [])
+        routes_by_cand = res.get("routes_by_candidate", {})
+        geofence_by_cand = res.get("geofence_by_candidate", {})
+        risk_by_cand = res.get("risk_by_candidate", {})
+
+        candidate_packages = []
+        for cand_dict in raw_candidates:
+            z_id = cand_dict.get("zone_id", "UNKNOWN")
+            
+            pfz_obj = PFZCandidate(**cand_dict)
+            w_obj = WeatherReading(**weather_by_cand[z_id]) if z_id in weather_by_cand else None
+            m_obj = MarineConditions(**marine_by_cand[z_id]) if z_id in marine_by_cand else None
+            hz_objs = [HazardAlert(**h) for h in hazards_list]
+            r_obj = Route(**routes_by_cand[z_id]) if z_id in routes_by_cand else None
+            g_obj = GeofenceResult(**geofence_by_cand[z_id]) if z_id in geofence_by_cand else None
+            risk_obj = RiskResult(**risk_by_cand[z_id]) if z_id in risk_by_cand else None
+
+            pkg = CandidatePackage(
+                zone_id=z_id,
+                pfz=pfz_obj,
+                weather=w_obj,
+                marine_conditions=m_obj,
+                hazards=hz_objs,
+                route=r_obj,
+                geofence=g_obj,
+                risk=risk_obj
+            )
+            candidate_packages.append(pkg)
+
+        # Step 5: Run Decision & Explanation Agent
+        trace_dicts = [t.model_dump() for t in plan_out.execution_trace]
+        final_output = decision_agent.decide_and_explain(
+            session_id=session_id,
+            language=nlu_out.language,
+            candidates=candidate_packages,
+            execution_trace=trace_dicts,
+            user_query=text,
+            intent=nlu_out.intent.value,
+            location_text=nlu_out.entities.location_text,
+            origin_coords=res.get("origin_coords"),
+            origin_weather=res.get("origin_weather"),
+            origin_marine=res.get("origin_marine"),
+            hazards=res.get("hazards", [])
+        )
+
+        # Step 6: Persist analysis and route decision into Supabase database
+        from app.database.data_pipeline import data_pipeline
+        data_pipeline.persist_decision_output(final_output, text, res.get("origin_coords"))
+
+        return final_output
+
+orchestrator = Orchestrator()
